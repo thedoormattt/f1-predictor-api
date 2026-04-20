@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import races, predictions, results, leaderboard, reference
-from routers import leagues
+from routers import leagues, players
 
 app = FastAPI(
     title="F1 Predictions League API",
@@ -23,6 +23,7 @@ app.include_router(results.router)
 app.include_router(leaderboard.router)
 app.include_router(reference.router)
 app.include_router(leagues.router)
+app.include_router(players.router)
 
 
 @app.get("/")
