@@ -130,3 +130,49 @@ async def score_race(
     ).execute()
 
     return res.data
+
+@router.post("/admin/score-all", response_model=dict)
+async def score_all_races(
+    x_admin_secret: str = Header(..., alias="X-Admin-Secret"),
+):
+    """Rescores all races that have results. Safe to run any time."""
+    _check_admin(x_admin_secret)
+    sb = get_supabase()
+
+    results = sb.table("results").select("race_id").execute()
+    if not results.data:
+        raise HTTPException(status_code=404, detail="No results found")
+
+    from app.models import PredictionBase, ResultBase
+
+    summary = {}
+    for row in results.data:
+        race_id = row["race_id"]
+
+        result_res = sb.table("results").select("*").eq("race_id", race_id).single().execute()
+        result = ResultBase(**result_res.data)
+
+        preds_res = sb.table("predictions").select("*").eq("race_id", race_id).execute()
+        if not preds_res.data:
+            summary[race_id] = "no predictions"
+            continue
+
+        scores_to_upsert = []
+        for pred_data in preds_res.data:
+            pred = PredictionBase(**pred_data)
+            breakdown = calculate_score(pred, result)
+            scores_to_upsert.append({
+                "player_id": pred_data["player_id"],
+                "race_id":   race_id,
+                **breakdown.model_dump(),
+                "scored_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+        sb.table("scores").upsert(
+            scores_to_upsert,
+            on_conflict="player_id,race_id"
+        ).execute()
+
+        summary[race_id] = f"{len(scores_to_upsert)} players scored"
+
+    return {"scored": summary}
