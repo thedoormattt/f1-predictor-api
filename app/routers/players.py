@@ -23,7 +23,7 @@ async def create_player(
 
     res = sb.table("players").insert({
         "id":   x_player_id,
-        "username": body.name,
+        "username": body.username,
         "full_name": body.full_name,
     }).execute()
 
