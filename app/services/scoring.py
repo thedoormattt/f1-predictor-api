@@ -2,18 +2,18 @@
 Scoring engine — mirrors the Race Predictions spreadsheet logic exactly.
 
 Points structure:
-  Pole position:       10 pts (exact match)
+  Pole position:        5 pts (exact match)
   P1:                  10 pts (exact match)
   P2:                   8 pts (exact match)
   P3:                   6 pts (exact match)
   Podium bonus:         5 pts (all three correct, any order)
   Podium wrong slot:    4 pts per driver (on podium but wrong position)
   Last place:           5 pts
-  Fastest lap:          5 pts
-  Fastest pitstop:      5 pts
-  Driver of the Day:    5 pts
-  Safety car correct:   5 pts
-  Pos gained winner:    5 pts
+  Fastest lap:          4 pts
+  Fastest pitstop:      4 pts
+  Driver of the Day:    4 pts
+  Safety car correct:   4 pts
+  Pos gained winner:    6 pts
 """
 
 from app.models import PredictionBase, ResultBase, ScoreBreakdown
@@ -27,7 +27,7 @@ def calculate_score(pred: PredictionBase, result: ResultBase) -> ScoreBreakdown:
 
     # ── Pole ─────────────────────────────────────────────────
     if pred.pole and pred.pole == result.pole:
-        s.pole_pts = 10
+        s.pole_pts = 5
 
     # ── Podium exact positions ────────────────────────────────
     if pred.p1 and pred.p1 == result.p1:
@@ -61,23 +61,23 @@ def calculate_score(pred: PredictionBase, result: ResultBase) -> ScoreBreakdown:
 
     # ── Fastest lap ──────────────────────────────────────────
     if pred.fastest_lap and pred.fastest_lap == result.fastest_lap:
-        s.fl_pts = 5
+        s.fl_pts = 4
 
     # ── Fastest pitstop ──────────────────────────────────────
     if pred.fastest_pitstop and pred.fastest_pitstop == result.fastest_pitstop:
-        s.fp_pts = 5
+        s.fp_pts = 4
 
     # ── Driver of the Day ────────────────────────────────────
     if pred.dotd and pred.dotd == result.dotd:
-        s.dotd_pts = 5
+        s.dotd_pts = 4
 
     # ── Safety car ───────────────────────────────────────────
     if pred.safety_car is not None and pred.safety_car == result.safety_car:
-        s.sc_pts = 5
+        s.sc_pts = 4
 
     # ── Position gained ──────────────────────────────────────
     if pred.pos_gained and pred.pos_gained == result.pos_gained_winner:
-        s.gains_pts = 5
+        s.gains_pts = 6
 
     # ── Total ────────────────────────────────────────────────
     s.total = (
