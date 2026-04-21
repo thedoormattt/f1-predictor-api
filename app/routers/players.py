@@ -6,7 +6,8 @@ router = APIRouter(prefix="/players", tags=["players"])
 
 
 class PlayerCreate(BaseModel):
-    name: str
+    username: str
+    full_name: str
 
 
 @router.post("/")
