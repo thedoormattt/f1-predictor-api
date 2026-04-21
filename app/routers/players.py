@@ -44,3 +44,10 @@ async def list_players():
     sb = get_supabase()
     res = sb.table("players").select("id, full_name, username").order("full_name").execute()
     return res.data
+
+
+@router.get("/{player_id}/scores")
+async def get_player_scores(player_id: str):
+    sb = get_supabase()
+    res = sb.table("scores").select("*").eq("player_id", player_id).execute()
+    return res.data
