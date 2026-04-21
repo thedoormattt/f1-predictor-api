@@ -22,7 +22,8 @@ async def create_player(
 
     res = sb.table("players").insert({
         "id":   x_player_id,
-        "name": body.name,
+        "username": body.name,
+        "full_name": body.full_name,
     }).execute()
 
     return res.data[0]
@@ -40,5 +41,5 @@ async def get_me(x_player_id: str = Header(..., alias="X-Player-Id")):
 @router.get("/")
 async def list_players():
     sb = get_supabase()
-    res = sb.table("players").select("id, name").order("name").execute()
+    res = sb.table("players").select("id, full_name, username").order("full_name").execute()
     return res.data
