@@ -1,15 +1,13 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Depends
 from app.database import get_supabase
-from app.models import Result, ResultCreate, Score, ScoreBreakdown
+from app.models import Result, Score
 from app.services.scoring import calculate_score
 from app.services.openf1 import fetch_race_result
-from app.config import settings
+from app.dependencies import require_admin
 
 router = APIRouter(prefix="/results", tags=["results"])
 
-
-# ── Public ───────────────────────────────────────────────────
 
 @router.get("/{race_id}", response_model=Result)
 async def get_result(race_id: int):
@@ -27,26 +25,12 @@ async def get_race_scores(race_id: int):
     return res.data
 
 
-# ── Admin — protected by a simple secret header ──────────────
-# In production you'd replace this with a proper admin role check
-
-def _check_admin(secret: str):
-    if secret != settings.secret_key:
-        raise HTTPException(status_code=403, detail="Not authorised")
-
-
 @router.post("/admin/{race_id}/fetch-openf1", response_model=Result)
 async def fetch_and_save_result(
     race_id: int,
-    x_admin_secret: str = Header(..., alias="X-Admin-Secret"),
+    _: None = Depends(require_admin),
 ):
-    """
-    Fetches result from OpenF1 and saves to DB.
-    Run this after each race. DotD must be added separately.
-    """
-    _check_admin(x_admin_secret)
     sb = get_supabase()
-
     race = sb.table("races").select("*").eq("id", race_id).single().execute()
     if not race.data:
         raise HTTPException(status_code=404, detail="Race not found")
@@ -62,7 +46,6 @@ async def fetch_and_save_result(
         **result.model_dump(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-
     res = sb.table("results").upsert(payload, on_conflict="race_id").execute()
     return res.data[0]
 
@@ -71,12 +54,9 @@ async def fetch_and_save_result(
 async def set_dotd(
     race_id: int,
     dotd: str,
-    x_admin_secret: str = Header(..., alias="X-Admin-Secret"),
+    _: None = Depends(require_admin),
 ):
-    """Manually set Driver of the Day (not available in OpenF1)."""
-    _check_admin(x_admin_secret)
     sb = get_supabase()
-
     res = sb.table("results").update({
         "dotd": dotd,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -90,31 +70,23 @@ async def set_dotd(
 @router.post("/admin/{race_id}/score", response_model=list[Score])
 async def score_race(
     race_id: int,
-    x_admin_secret: str = Header(..., alias="X-Admin-Secret"),
+    _: None = Depends(require_admin),
 ):
-    """
-    Runs scoring for all players for a given race.
-    Safe to re-run — upserts scores so corrections are applied cleanly.
-    """
-    _check_admin(x_admin_secret)
     sb = get_supabase()
 
     result_res = sb.table("results").select("*").eq("race_id", race_id).single().execute()
     if not result_res.data:
         raise HTTPException(status_code=404, detail="No result found — fetch OpenF1 data first")
 
-    from app.models import ResultBase
+    from app.models import ResultBase, PredictionBase
     result = ResultBase(**result_res.data)
 
     preds_res = sb.table("predictions").select("*").eq("race_id", race_id).execute()
-    predictions = preds_res.data
-
-    if not predictions:
+    if not preds_res.data:
         raise HTTPException(status_code=404, detail="No predictions found for this race")
 
-    from app.models import PredictionBase
     scores_to_upsert = []
-    for pred_data in predictions:
+    for pred_data in preds_res.data:
         pred = PredictionBase(**pred_data)
         breakdown = calculate_score(pred, result)
         scores_to_upsert.append({
@@ -125,18 +97,15 @@ async def score_race(
         })
 
     res = sb.table("scores").upsert(
-        scores_to_upsert,
-        on_conflict="player_id,race_id"
+        scores_to_upsert, on_conflict="player_id,race_id"
     ).execute()
-
     return res.data
 
-@router.post("/admin/score-all", response_model=dict)
+
+@router.post("/admin/score-all")
 async def score_all_races(
-    x_admin_secret: str = Header(..., alias="X-Admin-Secret"),
+    _: None = Depends(require_admin),
 ):
-    """Rescores all races that have results. Safe to run any time."""
-    _check_admin(x_admin_secret)
     sb = get_supabase()
 
     results = sb.table("results").select("race_id").execute()
@@ -169,10 +138,8 @@ async def score_all_races(
             })
 
         sb.table("scores").upsert(
-            scores_to_upsert,
-            on_conflict="player_id,race_id"
+            scores_to_upsert, on_conflict="player_id,race_id"
         ).execute()
-
         summary[race_id] = f"{len(scores_to_upsert)} players scored"
 
     return {"scored": summary}
