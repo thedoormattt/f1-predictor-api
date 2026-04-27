@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.config import settings
 from app.routers import races, predictions, results, leaderboard, reference, players, leagues
@@ -16,7 +17,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten to your Vercel URL in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,16 +38,22 @@ async def root():
 
 
 @app.get("/docs", include_in_schema=False)
-async def custom_swagger(request: Request):
-    secret = request.headers.get("X-Admin-Secret")
+async def custom_swagger(secret: str = "") -> HTMLResponse:
     if secret != settings.secret_key:
         raise HTTPException(status_code=404)
-    return get_swagger_ui_html(openapi_url="/openapi.json", title="F1 API Docs")
+    return get_swagger_ui_html(
+        openapi_url=f"/openapi.json?secret={secret}",
+        title="F1 API Docs"
+    )
 
 
 @app.get("/openapi.json", include_in_schema=False)
-async def custom_openapi(request: Request):
-    secret = request.headers.get("X-Admin-Secret")
+async def custom_openapi(secret: str = "") -> JSONResponse:
     if secret != settings.secret_key:
         raise HTTPException(status_code=404)
-    return get_openapi(title=app.title, version=app.version, routes=app.routes)
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    return JSONResponse(openapi_schema)
