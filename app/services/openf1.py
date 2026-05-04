@@ -129,12 +129,15 @@ async def _get_fastest_pitstop(client: httpx.AsyncClient, session_key: int) -> s
     return _team_name_to_acronym(team_name)
 
 
-async def _safety_car_deployed(client: httpx.AsyncClient, session_key: int) -> list[dict]:
+async def _safety_car_deployed(client: httpx.AsyncClient, session_key: int) -> bool:
     r = await _get(client, f"{OPENF1_BASE}/race_control", {
         "session_key": session_key,
-        "category":    "SafetyCar",
     })
-    return r.json()
+    data = r.json()
+    if not data:
+        raise ValueError(f"No race control data found for session {session_key} — check session key is correct")
+    
+    return any(e.get("category") == "SafetyCar" for e in data)
 
 
 async def _get_most_positions_gained(client: httpx.AsyncClient, session_key: int) -> str | None:
