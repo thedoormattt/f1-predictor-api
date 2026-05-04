@@ -39,7 +39,7 @@ async def fetch_race_result(meeting_key: int, session_key: int) -> ResultBase:
         positions   = await _get_positions(client, session_key)
         fastest_lap = await _get_fastest_lap(client, session_key, driver_map)
         fastest_pit = await _get_fastest_pitstop(client, session_key)
-        sc_laps     = await _get_safety_car_laps(client, session_key)
+        safety_car     = await _safety_car_deployed(client, session_key)
         pos_gained  = await _get_most_positions_gained(client, session_key)
 
     if not positions:
@@ -58,7 +58,7 @@ async def fetch_race_result(meeting_key: int, session_key: int) -> ResultBase:
         last_place        = acronym(sorted_pos[-1]["driver_number"]) if sorted_pos else None,
         fastest_lap       = fastest_lap,
         fastest_pitstop   = fastest_pit,
-        safety_car        = bool(sc_laps),
+        safety_car        = safety_car,
         pos_gained_winner = pos_gained,
         dotd              = None,
     )
@@ -129,12 +129,12 @@ async def _get_fastest_pitstop(client: httpx.AsyncClient, session_key: int) -> s
     return _team_name_to_acronym(team_name)
 
 
-async def _get_safety_car_laps(client: httpx.AsyncClient, session_key: int) -> list[dict]:
+async def _safety_car_deployed(client: httpx.AsyncClient, session_key: int) -> list[dict]:
     r = await _get(client, f"{OPENF1_BASE}/race_control", {
         "session_key": session_key,
         "category":    "SafetyCar",
     })
-    return [e for e in r.json() if "SAFETY CAR" in e.get("message", "").upper()]
+    return r.json()
 
 
 async def _get_most_positions_gained(client: httpx.AsyncClient, session_key: int) -> str | None:
