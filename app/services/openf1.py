@@ -39,8 +39,8 @@ async def fetch_race_result(meeting_key: int, session_key: int) -> ResultBase:
         positions   = await _get_positions(client, session_key)
         fastest_lap = await _get_fastest_lap(client, session_key, driver_map)
         fastest_pit = await _get_fastest_pitstop(client, session_key)
-        safety_car     = await _safety_car_deployed(client, session_key)
-        pos_gained  = await _get_most_positions_gained(client, session_key)
+        safety_car  = await _safety_car_deployed(client, session_key)
+        pos_gained  = await _get_most_positions_gained(client, session_key, meeting_key)
 
     if not positions:
         raise ValueError(f"No position data for session {session_key}")
@@ -140,8 +140,66 @@ async def _safety_car_deployed(client: httpx.AsyncClient, session_key: int) -> b
     return any(e.get("category") == "SafetyCar" for e in data)
 
 
-async def _get_most_positions_gained(client: httpx.AsyncClient, session_key: int) -> str | None:
-    return None
+async def _get_most_positions_gained(client: httpx.AsyncClient, session_key: int, meeting_key: int) -> str | None:
+    # Get qualifying session for this meeting to find grid positions
+    r = await _get(client, f"{OPENF1_BASE}/sessions", {
+        "meeting_key":  meeting_key,
+        "session_type": "Qualifying",
+    })
+    sessions = r.json()
+    if not sessions:
+        # Sprint weekend — try Sprint Qualifying
+        r = await _get(client, f"{OPENF1_BASE}/sessions", {
+            "meeting_key":  meeting_key,
+            "session_type": "Sprint Qualifying",
+        })
+        sessions = r.json()
+    if not sessions:
+        return None
+
+    quali_session_key = sessions[0]["session_key"]
+
+    # Get final qualifying positions (grid order)
+    r = await _get(client, f"{OPENF1_BASE}/position", {"session_key": quali_session_key})
+    quali_data = r.json()
+
+    grid: dict[int, dict] = {}
+    for entry in quali_data:
+        dn = entry["driver_number"]
+        if dn not in grid or entry["date"] > grid[dn]["date"]:
+            grid[dn] = entry
+
+    grid_positions = {dn: entry["position"] for dn, entry in grid.items()}
+
+    # Get final race positions
+    r = await _get(client, f"{OPENF1_BASE}/position", {"session_key": session_key})
+    race_data = r.json()
+
+    race_finish: dict[int, dict] = {}
+    for entry in race_data:
+        dn = entry["driver_number"]
+        if dn not in race_finish or entry["date"] > race_finish[dn]["date"]:
+            race_finish[dn] = entry
+
+    race_positions = {dn: entry["position"] for dn, entry in race_finish.items()}
+
+    # Calculate positions gained
+    best_driver = None
+    best_gain   = 0
+    for driver_number, finish_pos in race_positions.items():
+        start_pos = grid_positions.get(driver_number)
+        if start_pos is None:
+            continue
+        gain = start_pos - finish_pos  # positive = moved up
+        if gain > best_gain:
+            best_gain   = gain
+            best_driver = driver_number
+
+    if best_driver is None:
+        return None
+
+    driver_map = await _build_driver_map(client, session_key)
+    return driver_map.get(best_driver)
 
 
 def _team_name_to_acronym(team_name: str) -> str | None:
