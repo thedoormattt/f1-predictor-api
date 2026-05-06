@@ -5,6 +5,7 @@ from app.models import Result, Score
 from app.services.scoring import calculate_score
 from app.services.openf1 import fetch_race_result
 from app.dependencies import require_admin
+from app.models import PredictionBase, ResultBase
 
 router = APIRouter(prefix="/results", tags=["results"])
 
@@ -78,7 +79,6 @@ async def score_race(
     if not result_res.data:
         raise HTTPException(status_code=404, detail="No result found — fetch OpenF1 data first")
 
-    from app.models import ResultBase, PredictionBase
     result = ResultBase(**result_res.data)
 
     preds_res = sb.table("predictions").select("*").eq("race_id", race_id).execute()
@@ -112,8 +112,6 @@ async def score_all_races(
     if not results.data:
         raise HTTPException(status_code=404, detail="No results found")
 
-    from app.models import PredictionBase, ResultBase
-
     summary = {}
     for row in results.data:
         race_id = row["race_id"]
@@ -143,3 +141,20 @@ async def score_all_races(
         summary[race_id] = f"{len(scores_to_upsert)} players scored"
 
     return {"scored": summary}
+
+@router.patch("/admin/{race_id}/override", response_model=Result)
+async def override_result(
+    race_id: int,
+    body: ResultBase,
+    _: None = Depends(require_admin),
+):
+    sb = get_supabase()
+    payload = {
+        **body.model_dump(exclude_none=False),
+        "race_id":    race_id,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    res = sb.table("results").upsert(payload, on_conflict="race_id").execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="No result found for this race")
+    return res.data[0]
