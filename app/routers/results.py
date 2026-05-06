@@ -78,6 +78,10 @@ async def score_race(
     result_res = sb.table("results").select("*").eq("race_id", race_id).single().execute()
     if not result_res.data:
         raise HTTPException(status_code=404, detail="No result found — fetch OpenF1 data first")
+    
+    # Rollover predictions for players who didn't submit
+    race = sb.table("races").select("type, scheduled_at").eq("id", race_id).single().execute().data
+    await _rollover_predictions(sb, race_id, race["type"], race["scheduled_at"])
 
     result = ResultBase(**result_res.data)
 
@@ -119,6 +123,11 @@ async def score_all_races(
         result_res = sb.table("results").select("*").eq("race_id", race_id).single().execute()
         result = ResultBase(**result_res.data)
 
+        # Rollover predictions for players who didn't submit
+        race_data = sb.table("races").select("type, scheduled_at").eq("id", race_id).single().execute().data
+        if race_data:
+            await _rollover_predictions(sb, race_id, race_data["type"], race_data["scheduled_at"])
+
         preds_res = sb.table("predictions").select("*").eq("race_id", race_id).execute()
         if not preds_res.data:
             summary[race_id] = "no predictions"
@@ -138,6 +147,7 @@ async def score_all_races(
         sb.table("scores").upsert(
             scores_to_upsert, on_conflict="player_id,race_id"
         ).execute()
+
         summary[race_id] = f"{len(scores_to_upsert)} players scored"
 
     return {"scored": summary}
@@ -158,3 +168,43 @@ async def override_result(
     if not res.data:
         raise HTTPException(status_code=404, detail="No result found for this race")
     return res.data[0]
+
+async def _rollover_predictions(sb, race_id: int, race_type: str):
+    # Get all players
+    players = sb.table("players").select("id").execute().data
+    
+    # Get players who already have predictions for this race
+    existing = sb.table("predictions").select("player_id").eq("race_id", race_id).execute().data
+    existing_ids = {p["player_id"] for p in existing}
+    
+    # Find players with no prediction
+    missing = [p["id"] for p in players if p["id"] not in existing_ids]
+    if not missing:
+        return
+    
+    # Get the race's scheduled_at to find previous races of same type
+    race = sb.table("races").select("scheduled_at, type").eq("id", race_id).single().execute().data
+    
+    for player_id in missing:
+        # Find most recent prediction of same race type before this race
+        prev = sb.table("predictions") \
+            .select("*, races!inner(scheduled_at, type)") \
+            .eq("player_id", player_id) \
+            .eq("races.type", race_type) \
+            .lt("races.scheduled_at", race["scheduled_at"]) \
+            .order("races.scheduled_at", desc=True) \
+            .limit(1) \
+            .execute().data
+        
+        if not prev:
+            continue
+        
+        # Copy prediction forward
+        rolled = {k: v for k, v in prev[0].items() 
+                  if k not in ("id", "race_id", "created_at", "updated_at")}
+        rolled["race_id"]    = race_id
+        rolled["player_id"]  = player_id
+        rolled["is_rollover"] = True
+        rolled["updated_at"] = datetime.now(timezone.utc).isoformat()
+        
+        sb.table("predictions").insert(rolled).execute()
