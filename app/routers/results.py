@@ -169,7 +169,7 @@ async def override_result(
         raise HTTPException(status_code=404, detail="No result found for this race")
     return res.data[0]
 
-async def _rollover_predictions(sb, race_id: int, race_type: str):
+async def _rollover_predictions(sb, race_id: int, race_type: str, scheduled_at: str):
     # Get all players
     players = sb.table("players").select("id").execute().data
     
