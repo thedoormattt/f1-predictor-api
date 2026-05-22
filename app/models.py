@@ -11,6 +11,7 @@ class Race(BaseModel):
     type: str
     race_key: str
     scheduled_at: datetime
+    locks_at: datetime | None = None
     openf1_meeting_key: int | None = None
     openf1_session_key: int | None = None
 
