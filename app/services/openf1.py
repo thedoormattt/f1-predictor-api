@@ -37,6 +37,7 @@ async def fetch_race_result(meeting_key: int, session_key: int) -> ResultBase:
     async with httpx.AsyncClient(timeout=30.0) as client:
         driver_map  = await _build_driver_map(client, session_key)
         positions   = await _get_positions(client, session_key)
+        pole        = await _get_pole_position(client, meeting_key, session_key)
         fastest_lap = await _get_fastest_lap(client, session_key, driver_map)
         fastest_pit = await _get_fastest_pitstop(client, session_key)
         safety_car  = await _safety_car_deployed(client, session_key)
@@ -51,7 +52,7 @@ async def fetch_race_result(meeting_key: int, session_key: int) -> ResultBase:
         return driver_map.get(driver_number)
 
     return ResultBase(
-        pole              = acronym(sorted_pos[0]["driver_number"]) if sorted_pos else None,
+        pole              = pole,
         p1                = acronym(sorted_pos[0]["driver_number"]) if len(sorted_pos) > 0 else None,
         p2                = acronym(sorted_pos[1]["driver_number"]) if len(sorted_pos) > 1 else None,
         p3                = acronym(sorted_pos[2]["driver_number"]) if len(sorted_pos) > 2 else None,
@@ -62,6 +63,49 @@ async def fetch_race_result(meeting_key: int, session_key: int) -> ResultBase:
         pos_gained_winner = pos_gained,
         dotd              = None,
     )
+
+
+async def _get_pole_position(client: httpx.AsyncClient, meeting_key: int, session_key: int) -> str | None:
+    """Gets pole position from qualifying — P1 at end of qualifying session."""
+    # Find qualifying session for this meeting
+    r = await _get(client, f"{OPENF1_BASE}/sessions", {
+        "meeting_key":    meeting_key,
+        "session_name":   "Qualifying",
+    })
+    sessions = r.json()
+    if not sessions:
+        # Sprint weekend — use Sprint Qualifying
+        r = await _get(client, f"{OPENF1_BASE}/sessions", {
+            "meeting_key":  meeting_key,
+            "session_name": "Sprint Qualifying",
+        })
+        sessions = r.json()
+    if not sessions:
+        return None
+
+    quali_session_key = sessions[0]["session_key"]
+
+    # Get final positions from qualifying
+    r = await _get(client, f"{OPENF1_BASE}/position", {"session_key": quali_session_key})
+    quali_data = r.json()
+
+    if not quali_data:
+        return None
+
+    # Find final position for each driver
+    final: dict[int, dict] = {}
+    for entry in quali_data:
+        dn = entry["driver_number"]
+        if dn not in final or entry["date"] > final[dn]["date"]:
+            final[dn] = entry
+
+    # P1 in qualifying = pole
+    pole_driver = min(final.values(), key=lambda x: x["position"], default=None)
+    if not pole_driver:
+        return None
+
+    driver_map = await _build_driver_map(client, session_key)
+    return driver_map.get(pole_driver["driver_number"])
 
 
 async def _build_driver_map(client: httpx.AsyncClient, session_key: int) -> dict[int, str]:
