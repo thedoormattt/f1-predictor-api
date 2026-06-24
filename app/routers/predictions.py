@@ -60,3 +60,21 @@ async def submit_prediction(
         payload, on_conflict="player_id,race_id"
     ).execute()
     return res.data[0]
+
+@router.get("/race/{race_id}/all")
+async def get_all_race_predictions(
+    race_id: int,
+    _: str = Depends(verify_token),
+):
+    """Returns all players' predictions for a race, only after it has started."""
+    sb = get_supabase()
+    race = sb.table("races").select("locks_at, scheduled_at").eq("id", race_id).single().execute()
+    if not race.data:
+        raise HTTPException(status_code=404, detail="Race not found")
+
+    locks_at = datetime.fromisoformat(race.data.get("locks_at") or race.data["scheduled_at"])
+    if datetime.now(timezone.utc) < locks_at:
+        raise HTTPException(status_code=403, detail="Predictions hidden until race weekend starts")
+
+    preds = sb.table("predictions").select("*, players(username)").eq("race_id", race_id).execute()
+    return preds.data
