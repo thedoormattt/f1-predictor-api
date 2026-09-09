@@ -24,19 +24,19 @@ def make_pred(**kwargs) -> PredictionBase:
 class TestExactScores:
     def test_perfect_prediction(self):
         s = calculate_score(make_pred(), make_result())
-        assert s.pole_pts   == 10
+        assert s.pole_pts   == 5
         assert s.p1_pts     == 10
         assert s.p2_pts     == 8
         assert s.p3_pts     == 6
         assert s.podium_bonus == 5
         assert s.podium_pts == 0   # no partial when exact
         assert s.last_pts   == 5
-        assert s.fl_pts     == 5
-        assert s.fp_pts     == 5
-        assert s.dotd_pts   == 5
-        assert s.sc_pts     == 5
-        assert s.gains_pts  == 5
-        assert s.total      == 69
+        assert s.fl_pts     == 4
+        assert s.fp_pts     == 4
+        assert s.dotd_pts   == 4   # historical races only — DotD is retired
+        assert s.sc_pts     == 4
+        assert s.gains_pts  == 6
+        assert s.total      == 61
 
     def test_no_prediction_scores_zero(self):
         s = calculate_score(make_pred(p1="VER", p2="VER", p3="VER"), make_result())
@@ -70,10 +70,16 @@ class TestPodiumPartial:
         assert s.p1_pts == 10
 
     def test_driver_not_on_podium_scores_nothing(self):
+        # Actual: RUS, ANT, LEC — Predicted: VER, ANT, LEC
+        # VER finished off the podium, so contributes nothing. ANT and LEC were
+        # both called exactly, so they take full points — the 4pt wrong-slot
+        # partial only applies to a driver you placed in the wrong position.
         pred = make_pred(p1="VER", p2="ANT", p3="LEC")
         s = calculate_score(pred, make_result())
         assert s.p1_pts == 0
-        assert s.podium_pts == 4  # only ANT and LEC on podium (ANT wrong slot)
+        assert s.p2_pts == 8
+        assert s.p3_pts == 6
+        assert s.podium_pts == 0
 
 
 class TestPodiumBonus:
@@ -90,7 +96,7 @@ class TestPodiumBonus:
 class TestMiscScoring:
     def test_safety_car_correct(self):
         s = calculate_score(make_pred(safety_car=True), make_result(safety_car=True))
-        assert s.sc_pts == 5
+        assert s.sc_pts == 4
 
     def test_safety_car_wrong(self):
         s = calculate_score(make_pred(safety_car=False), make_result(safety_car=True))

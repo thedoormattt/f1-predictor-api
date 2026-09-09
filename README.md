@@ -72,20 +72,48 @@ render.yaml             # Render deployment config
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/results/admin/{race_id}/fetch-openf1` | Fetch result from OpenF1 and save |
-| PATCH | `/results/admin/{race_id}/dotd` | Set Driver of the Day manually |
+| PATCH | `/results/admin/{race_id}/override` | Correct individual result fields |
 | POST | `/results/admin/{race_id}/score` | Run scoring for all players |
+| POST | `/results/admin/score-all` | Rescore every race that has a result |
+| POST | `/results/admin/autoscore` | Run the automatic sweep immediately |
 
 ---
 
-## After each race — workflow
+## After each race — nothing
+
+Scoring is automatic. A background sweep runs on startup and every
+`AUTOSCORE_INTERVAL_MINUTES`, and for each race that finished recently it
+fetches the OpenF1 result and scores every player. Both steps are idempotent,
+and a race that is already fully scored is skipped without calling OpenF1.
+
+Free-tier Render instances sleep when idle, so the startup sweep is the one
+that matters: whatever was missed while the service was asleep is caught up the
+moment it wakes.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `AUTOSCORE_ENABLED` | `true` | Turn the sweep off entirely |
+| `AUTOSCORE_INTERVAL_MINUTES` | `15` | How often the sweep runs |
+| `AUTOSCORE_RACE_DELAY_MINUTES` | `210` | How long after lights out a GP is treated as finished |
+| `AUTOSCORE_SPRINT_DELAY_MINUTES` | `120` | Same, for sprints |
+| `AUTOSCORE_LOOKBACK_DAYS` | `10` | Races older than this are ignored by the sweep |
+
+The manual admin steps remain for corrections:
 
 ```
-1. POST /results/admin/{race_id}/fetch-openf1   # pulls data from OpenF1
-2. PATCH /results/admin/{race_id}/dotd?dotd=BOT # add DotD manually
-3. POST /results/admin/{race_id}/score           # calculates all scores
+POST  /results/admin/{race_id}/fetch-openf1   # re-pull from OpenF1
+PATCH /results/admin/{race_id}/override        # fix a field by hand
+POST  /results/admin/{race_id}/score           # recalculate scores
+POST  /results/admin/autoscore                 # run the sweep right now
 ```
 
-Scoring is idempotent — safe to re-run if you correct the result.
+### Driver of the Day
+
+DotD is not published by OpenF1 and was the only field ever entered by hand.
+It has been retired: it can no longer be set (the fetch and override endpoints
+both preserve whatever is stored) and it is no longer offered on the prediction
+form. The column, the model field and the 4-point scoring rule all remain, so
+historical scores are unchanged and stay reproducible on a rescore.
 
 ---
 

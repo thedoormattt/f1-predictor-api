@@ -1,11 +1,14 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends
 from app.database import get_supabase
-from app.models import Result, Score
-from app.services.scoring import calculate_score
-from app.services.openf1 import fetch_race_result
+from app.models import Result, Score, ResultBase
 from app.dependencies import require_admin
-from app.models import PredictionBase, ResultBase
+from app.services.autoscore import sweep_once
+from app.services.race_scoring import (
+    fetch_and_store_result,
+    preserve_fields,
+    score_race,
+)
 
 router = APIRouter(prefix="/results", tags=["results"])
 
@@ -36,74 +39,22 @@ async def fetch_and_save_result(
     if not race.data:
         raise HTTPException(status_code=404, detail="Race not found")
 
-    r = race.data
-    if not r.get("openf1_session_key"):
-        raise HTTPException(status_code=400, detail="Race has no openf1_session_key set")
-
-    result = await fetch_race_result(r["openf1_meeting_key"], r["openf1_session_key"])
-
-    payload = {
-        "race_id": race_id,
-        **result.model_dump(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    res = sb.table("results").upsert(payload, on_conflict="race_id").execute()
-    return res.data[0]
-
-
-@router.patch("/admin/{race_id}/dotd", response_model=Result)
-async def set_dotd(
-    race_id: int,
-    dotd: str,
-    _: None = Depends(require_admin),
-):
-    sb = get_supabase()
-    res = sb.table("results").update({
-        "dotd": dotd,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("race_id", race_id).execute()
-
-    if not res.data:
-        raise HTTPException(status_code=404, detail="No result found — fetch OpenF1 data first")
-    return res.data[0]
+    try:
+        return await fetch_and_store_result(sb, race.data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/admin/{race_id}/score", response_model=list[Score])
-async def score_race(
+async def score_race_endpoint(
     race_id: int,
     _: None = Depends(require_admin),
 ):
     sb = get_supabase()
-
-    result_res = sb.table("results").select("*").eq("race_id", race_id).single().execute()
-    if not result_res.data:
-        raise HTTPException(status_code=404, detail="No result found — fetch OpenF1 data first")
-    
-    # Rollover predictions for players who didn't submit
-    race = sb.table("races").select("type, scheduled_at").eq("id", race_id).single().execute().data
-    await _rollover_predictions(sb, race_id, race["type"], race["scheduled_at"])
-
-    result = ResultBase(**result_res.data)
-
-    preds_res = sb.table("predictions").select("*").eq("race_id", race_id).execute()
-    if not preds_res.data:
-        raise HTTPException(status_code=404, detail="No predictions found for this race")
-
-    scores_to_upsert = []
-    for pred_data in preds_res.data:
-        pred = PredictionBase(**pred_data)
-        breakdown = calculate_score(pred, result)
-        scores_to_upsert.append({
-            "player_id": pred_data["player_id"],
-            "race_id":   race_id,
-            **breakdown.model_dump(),
-            "scored_at": datetime.now(timezone.utc).isoformat(),
-        })
-
-    res = sb.table("scores").upsert(
-        scores_to_upsert, on_conflict="player_id,race_id"
-    ).execute()
-    return res.data
+    try:
+        return await score_race(sb, race_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.post("/admin/score-all")
@@ -119,38 +70,23 @@ async def score_all_races(
     summary = {}
     for row in results.data:
         race_id = row["race_id"]
-
-        result_res = sb.table("results").select("*").eq("race_id", race_id).single().execute()
-        result = ResultBase(**result_res.data)
-
-        # Rollover predictions for players who didn't submit
-        race_data = sb.table("races").select("type, scheduled_at").eq("id", race_id).single().execute().data
-        if race_data:
-            await _rollover_predictions(sb, race_id, race_data["type"], race_data["scheduled_at"])
-
-        preds_res = sb.table("predictions").select("*").eq("race_id", race_id).execute()
-        if not preds_res.data:
-            summary[race_id] = "no predictions"
-            continue
-
-        scores_to_upsert = []
-        for pred_data in preds_res.data:
-            pred = PredictionBase(**pred_data)
-            breakdown = calculate_score(pred, result)
-            scores_to_upsert.append({
-                "player_id": pred_data["player_id"],
-                "race_id":   race_id,
-                **breakdown.model_dump(),
-                "scored_at": datetime.now(timezone.utc).isoformat(),
-            })
-
-        sb.table("scores").upsert(
-            scores_to_upsert, on_conflict="player_id,race_id"
-        ).execute()
-
-        summary[race_id] = f"{len(scores_to_upsert)} players scored"
+        try:
+            scores = await score_race(sb, race_id)
+            summary[race_id] = f"{len(scores)} players scored"
+        except ValueError as exc:
+            summary[race_id] = str(exc)
 
     return {"scored": summary}
+
+
+@router.post("/admin/autoscore")
+async def run_autoscore_sweep(
+    _: None = Depends(require_admin),
+):
+    """Run the automatic post-race sweep right now instead of waiting for the timer."""
+    summary = await sweep_once()
+    return {"swept": summary or "nothing due"}
+
 
 @router.patch("/admin/{race_id}/override", response_model=Result)
 async def override_result(
@@ -164,42 +100,10 @@ async def override_result(
         "race_id":    race_id,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Driver of the Day is no longer settable — keep whatever is stored.
+    payload = preserve_fields(sb, race_id, payload)
+
     res = sb.table("results").upsert(payload, on_conflict="race_id").execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="No result found for this race")
     return res.data[0]
-
-async def _rollover_predictions(sb, race_id: int, race_type: str, scheduled_at: str):
-    players = sb.table("players").select("id").execute().data
-
-    existing = sb.table("predictions").select("player_id").eq("race_id", race_id).execute().data
-    existing_ids = {p["player_id"] for p in existing}
-
-    missing = [p["id"] for p in players if p["id"] not in existing_ids]
-    if not missing:
-        return
-
-    for player_id in missing:
-        # Get all predictions of same type before this race for this player
-        prev = sb.table("predictions") \
-            .select("*, races!inner(scheduled_at, type)") \
-            .eq("player_id", player_id) \
-            .eq("races.type", race_type) \
-            .lt("races.scheduled_at", scheduled_at) \
-            .execute().data
-
-        if not prev:
-            continue
-
-        # Sort in Python to find the most recent
-        prev.sort(key=lambda p: p["races"]["scheduled_at"], reverse=True)
-        most_recent = prev[0]
-
-        rolled = {k: v for k, v in most_recent.items()
-                  if k not in ("id", "race_id", "created_at", "updated_at", "races")}
-        rolled["race_id"]     = race_id
-        rolled["player_id"]   = player_id
-        rolled["is_rollover"] = True
-        rolled["updated_at"]  = datetime.now(timezone.utc).isoformat()
-
-        sb.table("predictions").insert(rolled).execute()
