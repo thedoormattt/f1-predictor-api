@@ -12,18 +12,33 @@ FastAPI backend for the F1 Predictions League webapp.
 
 ## Local setup
 
+Python 3.13 (see `.python-version` — Render reads the same file, so local and
+production stay on the same runtime).
+
 ```bash
-# 1. Clone and install
+# 1. Create and activate a virtualenv
+#    Homebrew Python refuses a global pip install (PEP 668), so this isn't optional
+python -m venv venv
+source venv/bin/activate
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 2. Copy env file and fill in your Supabase credentials
-cp .env .env
+# 3. Create .env with your Supabase credentials
+cat > .env <<'EOF'
+SUPABASE_URL=
+SUPABASE_SERVICE_KEY=
+SUPABASE_ANON_KEY=
+SECRET_KEY=
+EOF
 
-# 3. Run locally
+# 4. Run locally
 uvicorn app.main:app --reload
 ```
 
-API docs available at http://localhost:8000/docs
+API docs available at http://localhost:8000/docs?secret=$SECRET_KEY
+
+Run the tests with `pytest tests/`.
 
 ---
 
