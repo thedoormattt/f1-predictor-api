@@ -187,3 +187,95 @@ async def test_fetch_race_result_maps_monza(patched, monkeypatch):
     assert result.fastest_lap == "RUS"
     assert result.safety_car is True
     assert result.dotd is None                 # retired, never written
+
+
+# ── Singapore 2026: a non-integer position must not crash the fetch ──
+
+from tests import fixtures_singapore_2026 as sing   # noqa: E402
+
+
+def make_singapore_get():
+    results = {sing.QUALI_KEY: sing.QUALI_RESULT, sing.RACE_KEY: sing.RACE_RESULT}
+
+    async def fake_get(client, url, params={}):
+        path = url.rsplit("/", 1)[-1]
+        if path == "sessions":
+            return FakeResponse(sing.SESSIONS)
+        if path == "drivers":
+            return FakeResponse(sing.DRIVER_ROWS)
+        if path == "starting_grid":
+            return FakeResponse(sing.STARTING_GRID)
+        if path == "session_result":
+            return FakeResponse(results.get(params.get("session_key"), []))
+        if path == "race_control":
+            return FakeResponse([{"category": "SafetyCar", "message": "SAFETY CAR"}])
+        if path == "laps":
+            return FakeResponse([{"driver_number": 3, "lap_duration": 90.1, "is_pit_out_lap": False}])
+        if path == "pit":
+            return FakeResponse([{"driver_number": 6, "pit_duration": 22.0}])
+        if path == "position":
+            return FakeResponse([])
+        return FakeResponse([])
+
+    return fake_get
+
+
+class TestCoercePosition:
+    def test_integers_pass_through(self):
+        assert openf1._coerce_position(7) == 7
+
+    def test_numeric_strings_are_accepted(self):
+        assert openf1._coerce_position("7") == 7
+        assert openf1._coerce_position(" 7 ") == 7
+
+    def test_sentinel_strings_are_rejected(self):
+        assert openf1._coerce_position("RT") is None
+        assert openf1._coerce_position("") is None
+        assert openf1._coerce_position("+1 LAP") is None
+
+    def test_none_and_bool_are_rejected(self):
+        assert openf1._coerce_position(None) is None
+        assert openf1._coerce_position(True) is None
+
+
+@pytest.mark.asyncio
+async def test_pole_survives_a_non_integer_qualifying_position(patched):
+    """The exact regression: driver 6 came back as "RT" and min() raised."""
+    patched(make_singapore_get())
+
+    pole = await openf1._get_pole_position(None, sing.QUALI_KEY, sing.DRIVERS)
+
+    assert pole == "VER"
+
+
+def test_rt_driver_is_not_classified():
+    classified = openf1._classified(sing.QUALI_RESULT)
+    assert 6 not in classified
+    assert len(classified) == 21
+    assert classified[3] == 1
+
+
+@pytest.mark.asyncio
+async def test_singapore_grid_is_the_gp_grid_not_the_sprint(patched):
+    patched(make_singapore_get())
+
+    grid = await openf1._get_starting_grid(None, sing.MEETING_KEY, sing.QUALI_KEY)
+
+    assert grid[6] == 22      # HAD started last, having set no time
+    assert grid[63] == 19     # RUS; the sprint grid had him P2
+    assert len(grid) == 22
+
+
+@pytest.mark.asyncio
+async def test_singapore_maps_end_to_end(patched):
+    patched(make_singapore_get())
+
+    result = await openf1.fetch_race_result(sing.MEETING_KEY, sing.RACE_KEY)
+
+    assert result.p1 == "VER"
+    assert result.p2 == "LEC"
+    assert result.p3 == "ANT"
+    assert result.pole == "VER"
+    assert result.last_place == "BOT"       # P19, last classified
+    # HAD: P22 on the grid to P10 = +12, beating RUS on +10
+    assert result.pos_gained_winner == "HAD"

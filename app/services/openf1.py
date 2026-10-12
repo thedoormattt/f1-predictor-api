@@ -137,12 +137,38 @@ def _resolve_qualifying_session(sessions: list[dict], race_session_key: int) -> 
 
 # ── classifications ──────────────────────────────────────────
 
+def _coerce_position(value) -> int | None:
+    """
+    A position is only usable if it is an integer.
+
+    OpenF1 returns sentinel strings for entries with no classified position —
+    Singapore 2026 qualifying came back with `"position": "RT"` for driver 6,
+    alongside integers for everyone else, while dnf/dns/dsq were all false. Left
+    unchecked that string reaches a comparison and raises TypeError, taking the
+    whole result fetch down with it.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _classified(rows: list[dict]) -> dict[int, int]:
     """{driver_number: position} for drivers with an official finishing position."""
     out = {}
     for r in rows:
-        pos = r.get("position")
-        if pos is None or r.get("dns") or r.get("dsq"):
+        if r.get("dns") or r.get("dsq"):
+            continue
+        pos = _coerce_position(r.get("position"))
+        if pos is None:
+            log.debug(
+                "openf1: driver %s has no classified position (%r)",
+                r.get("driver_number"), r.get("position"),
+            )
             continue
         out[r["driver_number"]] = pos
     return out
@@ -171,7 +197,13 @@ async def _feed_positions(client: httpx.AsyncClient, session_key: int) -> dict[i
         dn = entry["driver_number"]
         if dn not in latest or entry["date"] > latest[dn]["date"]:
             latest[dn] = entry
-    return {dn: e["position"] for dn, e in latest.items()}
+
+    out = {}
+    for dn, entry in latest.items():
+        pos = _coerce_position(entry.get("position"))
+        if pos is not None:
+            out[dn] = pos
+    return out
 
 
 # ── grid and positions gained ────────────────────────────────
@@ -194,7 +226,12 @@ async def _get_starting_grid(
         if for_session:
             rows = for_session
 
-    return {r["driver_number"]: r["position"] for r in rows if r.get("position") is not None}
+    out = {}
+    for r in rows:
+        pos = _coerce_position(r.get("position"))
+        if pos is not None:
+            out[r["driver_number"]] = pos
+    return out
 
 
 async def _get_most_positions_gained(
