@@ -195,7 +195,12 @@ from tests import fixtures_singapore_2026 as sing   # noqa: E402
 
 
 def make_singapore_get():
-    results = {sing.QUALI_KEY: sing.QUALI_RESULT, sing.RACE_KEY: sing.RACE_RESULT}
+    results = {
+        sing.QUALI_KEY: sing.QUALI_RESULT,
+        sing.RACE_KEY: sing.RACE_RESULT,
+        sing.SPRINT_QUALI_KEY: sing.SPRINT_QUALI_RESULT,
+        sing.SPRINT_KEY: sing.SPRINT_RESULT,
+    }
 
     async def fake_get(client, url, params={}):
         path = url.rsplit("/", 1)[-1]
@@ -279,3 +284,29 @@ async def test_singapore_maps_end_to_end(patched):
     assert result.last_place == "BOT"       # P19, last classified
     # HAD: P22 on the grid to P10 = +12, beating RUS on +10
     assert result.pos_gained_winner == "HAD"
+
+
+@pytest.mark.asyncio
+async def test_sprint_uses_sprint_qualifying_and_the_sprint_grid(patched):
+    """Race 63 scores off session 11383, whose grid came from 11379."""
+    patched(make_singapore_get())
+
+    result = await openf1.fetch_race_result(sing.MEETING_KEY, sing.SPRINT_KEY)
+
+    assert result.p1 == "VER"
+    assert result.p2 == "HAM"
+    assert result.p3 == "LEC"
+    assert result.pole == "VER"              # sprint qualifying P1
+    # PIA retired on lap 19 of 20 but is still classified P14, so he is last
+    assert result.last_place == "PIA"
+    # SAI: sprint grid P22 to P12 = +10, ahead of BEA on +7
+    assert result.pos_gained_winner == "SAI"
+
+
+def test_sprint_resolution_picks_sprint_qualifying():
+    assert openf1._resolve_qualifying_session(
+        sing.SESSIONS, sing.SPRINT_KEY
+    ) == sing.SPRINT_QUALI_KEY
+    assert openf1._resolve_qualifying_session(
+        sing.SESSIONS, sing.RACE_KEY
+    ) == sing.QUALI_KEY

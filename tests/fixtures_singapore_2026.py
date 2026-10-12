@@ -74,3 +74,29 @@ STARTING_GRID = [
      "session_key": QUALI_KEY, "lap_duration": None}
     for i, d in enumerate(GP_GRID_ORDER)
 ]
+
+# ── Sprint ───────────────────────────────────────────────
+# Sprint qualifying was all integers, and the sprint grid matched it exactly
+# (no penalties), so the sprint exercises the happy path through a different
+# pair of sessions. The sprint itself was carnage: 14 classified, 8 retired,
+# and Piastri classified P14 on a DNF after 19 of 20 laps.
+
+SPRINT_QUALI_ORDER = SPRINT_GRID_ORDER
+SPRINT_QUALI_RESULT = [
+    {"position": i + 1, "driver_number": d,
+     "dnf": d in (6, 10), "dns": False, "dsq": False}
+    for i, d in enumerate(SPRINT_QUALI_ORDER)
+]
+
+SPRINT_ORDER = [3, 44, 16, 12, 30, 87, 27, 1, 10, 31, 14, 55, 41, 81]
+SPRINT_RETIRED = {23: 14, 5: 6, 77: 6, 6: 2, 43: 2, 63: 1, 11: 1, 18: 0}
+
+SPRINT_RESULT = [
+    {"position": i + 1, "driver_number": d, "dnf": d == 81,
+     "dns": False, "dsq": False}
+    for i, d in enumerate(SPRINT_ORDER)
+] + [
+    {"position": None, "driver_number": d, "dnf": True, "dns": False,
+     "dsq": False, "number_of_laps": laps}
+    for d, laps in SPRINT_RETIRED.items()
+]

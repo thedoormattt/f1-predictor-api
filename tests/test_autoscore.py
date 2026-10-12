@@ -183,3 +183,60 @@ class _FrozenDatetime(datetime):
     @classmethod
     def now(cls, tz=None):
         return NOW
+
+
+# ── Singapore 2026 regression, end to end through the sweep ──
+
+@pytest.mark.asyncio
+async def test_sweep_scores_a_race_with_an_unclassified_qualifier(monkeypatch):
+    """
+    The symptom that exposed the bug: a non-integer qualifying position raised
+    inside fetch_race_result, so the sweep stored no result at all and the race
+    stayed unscored — the podium and everything else lost to one bad field.
+
+    Unlike the other tests here this drives the real OpenF1 mapping; only the
+    HTTP layer is faked.
+    """
+    from app.services import openf1
+    from tests import fixtures_singapore_2026 as sing
+    from tests.test_openf1 import make_singapore_get
+
+    race = {
+        "id": 64, "round": 17, "location": "SIN 🇸🇬", "type": "GP",
+        "race_key": "SIN_GP",
+        "scheduled_at": iso(NOW - timedelta(hours=6)),
+        "openf1_meeting_key": sing.MEETING_KEY,
+        "openf1_session_key": sing.RACE_KEY,
+    }
+    sb = FakeSupabase(
+        races=[race],
+        players=[{"id": "p1"}, {"id": "p2"}],
+        predictions=[
+            {"id": 1, "player_id": "p1", "race_id": 64,
+             "p1": "VER", "p2": "LEC", "p3": "ANT"},
+            {"id": 2, "player_id": "p2", "race_id": 64,
+             "p1": "NOR", "pos_gained": "HAD"},
+        ],
+        results=[],
+        scores=[],
+    )
+    monkeypatch.setattr(openf1, "_get", make_singapore_get())
+    monkeypatch.setattr(autoscore, "get_supabase", lambda: sb)
+    monkeypatch.setattr(autoscore, "datetime", _FrozenDatetime)
+
+    summary = await autoscore.sweep_once()
+
+    assert summary == {64: "scored 2 players"}
+
+    stored = sb.store["results"][0]
+    assert (stored["p1"], stored["p2"], stored["p3"]) == ("VER", "LEC", "ANT")
+    assert stored["pole"] == "VER"
+    assert stored["last_place"] == "BOT"
+    assert stored["pos_gained_winner"] == "HAD"
+
+    # p1 called the podium exactly: 10 + 8 + 6, plus the 5pt bonus
+    p1 = next(s for s in sb.store["scores"] if s["player_id"] == "p1")
+    assert p1["total"] == 29
+    # p2 only got positions gained, which needed the grid to survive the fetch
+    p2 = next(s for s in sb.store["scores"] if s["player_id"] == "p2")
+    assert p2["gains_pts"] == 6
